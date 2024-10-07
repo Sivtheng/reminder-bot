@@ -11,14 +11,12 @@ import os
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import traceback
 import logging
 from google.oauth2 import service_account
 import sys
 import signal
-from logging.handlers import RotatingFileHandler
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
@@ -50,6 +48,7 @@ class CalendarBot:
         self.reminders = self.load_data('reminders.json', {})
         self.holiday_cache = {}
         self.cache_expiry = 24 * 60 * 60  # 24 hours in seconds
+        self.stop_signal = asyncio.Event()
 
     def load_data(self, filename, default):
         try:
@@ -292,8 +291,9 @@ class CalendarBot:
         
         # Run the bot until it's stopped
         try:
-            # This will run forever until you send a stop signal to the bot
-            await self.application.running
+            # Use asyncio.Event to keep the coroutine running
+            stop_signal = asyncio.Event()
+            await stop_signal.wait()
         finally:
             await self.application.stop()
 
@@ -301,6 +301,7 @@ class CalendarBot:
         try:
             print("Stopping bot...")
             self.notification_task.cancel()
+            self.stop_signal.set()  # Signal the bot to stop
             await self.application.stop()
             await self.application.shutdown()
         except Exception as e:
