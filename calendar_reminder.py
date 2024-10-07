@@ -95,7 +95,7 @@ class CalendarBot:
         
         return None
 
-    def fetch_holidays(self, limit_to_current_year=False):
+    def fetch_holidays(self, limit_to_current_year=True):
         current_time = datetime.now()
         if self.holiday_cache and current_time - self.holiday_cache['timestamp'] < timedelta(seconds=self.cache_expiry):
             logger.info("Using cached holiday data")
@@ -108,11 +108,16 @@ class CalendarBot:
                 return []  # Return an empty list if the service is not available
             try:
                 calendar_id = 'en.kh#holiday@group.v.calendar.google.com'  # ID for Cambodian holidays
-                now = datetime.utcnow().isoformat() + 'Z'
+                
+                # Set time range for the current year
+                year_start = datetime(current_time.year, 1, 1).isoformat() + 'Z'
+                year_end = datetime(current_time.year, 12, 31).isoformat() + 'Z'
+                
                 events_result = service.events().list(calendarId=calendar_id,
-                                                    timeMin=now,
-                                                    maxResults=100, singleEvents=True,
-                                                    orderBy='startTime').execute()
+                                                        timeMin=year_start,
+                                                        timeMax=year_end,
+                                                        maxResults=100, singleEvents=True,
+                                                        orderBy='startTime').execute()
                 events = events_result.get('items', [])
 
                 holidays = []
@@ -127,15 +132,11 @@ class CalendarBot:
                     'timestamp': current_time,
                     'data': holidays
                 }
-                logger.info(f"Fetched {len(holidays)} holidays")
+                logger.info(f"Fetched {len(holidays)} holidays for the year {current_time.year}")
             except Exception as e:
                 logger.error(f"Error fetching holidays: {str(e)}")
                 return []
-
-        if limit_to_current_year:
-            current_year = str(current_time.year)
-            holidays = [h for h in holidays if h['date'].startswith(current_year)]
-
+        
         return holidays
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -167,14 +168,16 @@ class CalendarBot:
             )
         return CHOOSING_ACTION
 
-    async def add_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async def add_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Add reminder method called")
         query = update.callback_query
-        await query.answer()
-        await query.edit_message_text("Please enter your reminder in the format: YYYY-MM-DD Description")
-        return ADDING_REMINDER
+        await query.edit_message_text("Please enter your reminder in the format: Description, YYYY-MM-DD")
+        context.user_data['expecting_reminder'] = True
 
-    async def save_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async def save_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.user_data.get('expecting_reminder'):
+            return
+
         text = update.message.text
         try:
             description, date_str = map(str.strip, text.split(','))
@@ -196,10 +199,12 @@ class CalendarBot:
                 f"You will be notified one day before and on the day of the reminder."
             )
         except Exception as e:
+            logger.error(f"Error saving reminder: {str(e)}")
             await update.message.reply_text(
                 "Invalid format. Please use: Description, YYYY-MM-DD"
             )
-        return ConversationHandler.END
+        finally:
+            context.user_data['expecting_reminder'] = False
 
     async def list_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info("List reminders method called")
@@ -224,39 +229,34 @@ class CalendarBot:
         await query.edit_message_text(reminder_text)
         return ConversationHandler.END
 
-    async def list_holidays(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async def list_holidays(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("List holidays method called")
         query = update.callback_query
         await query.answer()
-
+        
         current_time = datetime.now()
-        current_year = str(current_time.year)
-        logger.info(f"Fetching holidays for {current_year}")
-        holidays = self.fetch_holidays(limit_to_current_year=True)
+        current_year = current_time.year
+        
+        holidays = self.fetch_holidays()
         
         if not holidays:
-            logger.warning("No holidays found")
-            await query.edit_message_text(f"No upcoming holidays found for {current_year}.")
-            return ConversationHandler.END
+            await query.edit_message_text(f"No holidays found for {current_year}.")
+            return
         
-        today = datetime.now().date()
-        upcoming_holidays = [h for h in holidays if datetime.strptime(h['date'], '%Y-%m-%d').date() >= today]
+        holiday_list = "\n".join([f"📅 {h['date']}: {h['name']}" for h in holidays])
+        message = f"Holidays for {current_year}:\n\n{holiday_list}"
         
-        if not upcoming_holidays:
-            logger.info(f"No upcoming holidays for {current_year}")
-            await query.edit_message_text(f"No more holidays left for {current_year}.")
-            return ConversationHandler.END
-        
-        holiday_list = "\n".join([f"{h['date']}: {h['name']}" for h in upcoming_holidays])
-        logger.info(f"Sending list of {len(upcoming_holidays)} upcoming holidays")
-        await query.edit_message_text(f"Upcoming holidays for {current_year}:\n\n{holiday_list}")
+        if len(message) > 4096:
+            # If message is too long, split it
+            for i in range(0, len(message), 4096):
+                await query.message.reply_text(message[i:i+4096])
+        else:
+            await query.edit_message_text(message)
         
         # Add a button to go back to the main menu
         keyboard = [[InlineKeyboardButton("Back to Main Menu", callback_data='start')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text("What would you like to do next?", reply_markup=reply_markup)
-        
-        return CHOOSING_ACTION
 
     async def check_notifications(self):
         while True:
@@ -338,20 +338,31 @@ class CalendarBot:
         start_handler = CommandHandler('start', self.start)
         self.application.add_handler(start_handler)
 
-        self.conv_handler = ConversationHandler(
-            entry_points=[start_handler, CallbackQueryHandler(self.start, pattern='^start$')],
-            states={
-                CHOOSING_ACTION: [
-                    CallbackQueryHandler(self.add_reminder, pattern='^add_reminder$'),
-                    CallbackQueryHandler(self.list_reminders, pattern='^list_reminders$'),
-                    CallbackQueryHandler(self.list_holidays, pattern='^list_holidays$'),
-                ],
-                ADDING_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_reminder)],
-            },
-            fallbacks=[start_handler],
-        )
-        self.application.add_handler(self.conv_handler)
+        # Add a general callback query handler
+        self.application.add_handler(CallbackQueryHandler(self.handle_callback))
+
+        # Add a message handler for adding reminders
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_reminder))
+
         logger.info("Handlers set up successfully")
+
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        logger.info(f"Received callback query with data: {query.data}")
+
+        await query.answer()
+
+        if query.data == 'add_reminder':
+            await self.add_reminder(update, context)
+        elif query.data == 'list_reminders':
+            await self.list_reminders(update, context)
+        elif query.data == 'list_holidays':
+            await self.list_holidays(update, context)
+        elif query.data == 'start':
+            await self.start(update, context)
+        else:
+            logger.warning(f"Unknown callback query data: {query.data}")
+            await query.edit_message_text("Sorry, I didn't understand that command.")
 
 if __name__ == '__main__':
     try:
