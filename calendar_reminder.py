@@ -306,7 +306,7 @@ class CalendarBot:
         self.notification_task = asyncio.create_task(self.check_notifications())
         
         # Run the bot until the user presses Ctrl-C
-        await self.application.updater.idle()
+        await self.application.running
 
     async def stop(self):
         try:
