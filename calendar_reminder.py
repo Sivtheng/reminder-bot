@@ -69,37 +69,19 @@ class CalendarBot:
     def get_google_calendar_service(self):
         try:
             creds = None
-            if os.environ.get('GOOGLE_TOKEN'):
-                logger.info("Found GOOGLE_TOKEN environment variable")
-                token_info = json.loads(os.environ['GOOGLE_TOKEN'])
-                creds = Credentials.from_authorized_user_info(token_info, ['https://www.googleapis.com/auth/calendar.readonly'])
-            elif os.environ.get('GOOGLE_CREDENTIALS'):
+            if os.environ.get('GOOGLE_CREDENTIALS'):
                 logger.info("Found GOOGLE_CREDENTIALS environment variable")
                 creds_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
-                if 'installed' in creds_info:
-                    # This is a client secret file, not a service account
-                    flow = InstalledAppFlow.from_client_config(creds_info, ['https://www.googleapis.com/auth/calendar.readonly'])
-                    creds = flow.run_local_server(port=0)
-                else:
-                    # Assume it's a service account
-                    creds = service_account.Credentials.from_service_account_info(creds_info)
+                creds = service_account.Credentials.from_service_account_info(creds_info)
             else:
-                logger.error("Neither GOOGLE_TOKEN nor GOOGLE_CREDENTIALS environment variable found")
-                raise Exception("Google Calendar credentials not found")
-
-            if not creds or not creds.valid:
-                if creds and creds.expired and creds.refresh_token:
-                    logger.info("Refreshing expired credentials")
-                    creds.refresh(Request())
-                else:
-                    logger.error("Credentials are invalid and cannot be refreshed")
-                    raise Exception("Invalid credentials")
+                logger.error("GOOGLE_CREDENTIALS environment variable not found")
+                return None  # Return None instead of raising an exception
 
             logger.info("Building Google Calendar service")
             return build('calendar', 'v3', credentials=creds)
         except Exception as e:
             logger.error(f"Error in get_google_calendar_service: {str(e)}")
-            raise Exception(f"Google Calendar credentials error: {str(e)}")
+            return None  # Return None instead of raising an exception
 
     def fetch_holidays(self, limit_to_current_year=False):
         current_time = datetime.now()
@@ -108,8 +90,11 @@ class CalendarBot:
             holidays = self.holiday_cache['data']
         else:
             logger.info("Fetching new holiday data from Google Calendar API")
+            service = self.get_google_calendar_service()
+            if service is None:
+                logger.error("Failed to get Google Calendar service")
+                return []  # Return an empty list if the service is not available
             try:
-                service = self.get_google_calendar_service()
                 calendar_id = 'en.kh#holiday@group.v.calendar.google.com'  # ID for Cambodian holidays
                 now = datetime.utcnow().isoformat() + 'Z'
                 events_result = service.events().list(calendarId=calendar_id,
@@ -305,8 +290,12 @@ class CalendarBot:
         # Start the notification check loop after bot is initialized
         self.notification_task = asyncio.create_task(self.check_notifications())
         
-        # Run the bot until the user presses Ctrl-C
-        await self.application.running
+        # Run the bot until it's stopped
+        try:
+            # This will run forever until you send a stop signal to the bot
+            await self.application.running
+        finally:
+            await self.application.stop()
 
     async def stop(self):
         try:
