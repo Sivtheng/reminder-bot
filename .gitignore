@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# .env
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Bot-specific files
+# reminders.json
+token.json
+credentials.json
+
+# OS-specific files
+.DS_Store
+Thumbs.db
