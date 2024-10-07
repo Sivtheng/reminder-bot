@@ -40,8 +40,11 @@ Calendar Notification Bot is a Telegram bot that helps users manage reminders an
    ```
 
 4. Set up Google Calendar API:
-   - Follow the [Google Calendar API Python Quickstart](https://developers.google.com/calendar/quickstart/python) to obtain the `credentials.json` file.
-   - Place the `credentials.json` file in the project root directory.
+   - Create a service account in the Google Cloud Console.
+   - Download the JSON key for the service account.
+   - Either:
+     a. Set the contents of the JSON key as the `GOOGLE_CREDENTIALS` environment variable, or
+     b. Rename the JSON key file to `credentials.json` and place it in the project root directory.
 
 ## Usage
 

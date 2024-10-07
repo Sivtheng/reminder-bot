@@ -72,15 +72,21 @@ class CalendarBot:
                 logger.info("Found GOOGLE_CREDENTIALS environment variable")
                 creds_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
                 creds = service_account.Credentials.from_service_account_info(creds_info)
+            elif os.path.exists('credentials.json'):
+                logger.info("Found credentials.json file")
+                creds = service_account.Credentials.from_service_account_file('credentials.json')
             else:
-                logger.error("GOOGLE_CREDENTIALS environment variable not found")
-                return None  # Return None instead of raising an exception
+                logger.error("No credentials found. Set GOOGLE_CREDENTIALS or provide credentials.json")
+                return None
 
             logger.info("Building Google Calendar service")
             return build('calendar', 'v3', credentials=creds)
+        except json.JSONDecodeError:
+            logger.error("Failed to parse GOOGLE_CREDENTIALS as JSON")
         except Exception as e:
             logger.error(f"Error in get_google_calendar_service: {str(e)}")
-            return None  # Return None instead of raising an exception
+        
+        return None
 
     def fetch_holidays(self, limit_to_current_year=False):
         current_time = datetime.now()
