@@ -14,6 +14,8 @@ from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import traceback
+import logging
+from google.oauth2 import service_account
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
@@ -22,6 +24,9 @@ warnings.filterwarnings("ignore", category=PTBUserWarning)
 
 # States for conversation handler
 CHOOSING_ACTION, ADDING_REMINDER = range(2)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class CalendarBot:
     def __init__(self):
@@ -47,47 +52,73 @@ class CalendarBot:
             json.dump(data, f)
 
     def get_google_calendar_service(self):
-        SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-        creds = None
-
-        if os.path.exists('credentials.json'):
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+        try:
+            creds = None
+            if os.environ.get('GOOGLE_TOKEN'):
+                logger.info("Found GOOGLE_TOKEN environment variable")
+                token_info = json.loads(os.environ['GOOGLE_TOKEN'])
+                creds = Credentials.from_authorized_user_info(token_info, ['https://www.googleapis.com/auth/calendar.readonly'])
+            elif os.environ.get('GOOGLE_CREDENTIALS'):
+                logger.info("Found GOOGLE_CREDENTIALS environment variable")
+                creds_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+                if 'installed' in creds_info:
+                    # This is a client secret file, not a service account
+                    flow = InstalledAppFlow.from_client_config(creds_info, ['https://www.googleapis.com/auth/calendar.readonly'])
+                    creds = flow.run_local_server(port=0)
+                else:
+                    # Assume it's a service account
+                    creds = service_account.Credentials.from_service_account_info(creds_info)
             else:
-                raise Exception("Google Calendar credentials not found or invalid")
+                logger.error("Neither GOOGLE_TOKEN nor GOOGLE_CREDENTIALS environment variable found")
+                raise Exception("Google Calendar credentials not found")
 
-        return build('calendar', 'v3', credentials=creds)
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    logger.info("Refreshing expired credentials")
+                    creds.refresh(Request())
+                else:
+                    logger.error("Credentials are invalid and cannot be refreshed")
+                    raise Exception("Invalid credentials")
+
+            logger.info("Building Google Calendar service")
+            return build('calendar', 'v3', credentials=creds)
+        except Exception as e:
+            logger.error(f"Error in get_google_calendar_service: {str(e)}")
+            raise Exception(f"Google Calendar credentials error: {str(e)}")
 
     def fetch_holidays(self, limit_to_current_year=False):
         current_time = datetime.now()
         if self.holiday_cache and current_time - self.holiday_cache['timestamp'] < timedelta(seconds=self.cache_expiry):
+            logger.info("Using cached holiday data")
             holidays = self.holiday_cache['data']
         else:
-            service = self.get_google_calendar_service()
-            calendar_id = 'en.kh#holiday@group.v.calendar.google.com'  # ID for Cambodian holidays
-            now = datetime.utcnow().isoformat() + 'Z'
-            events_result = service.events().list(calendarId=calendar_id,
+            logger.info("Fetching new holiday data from Google Calendar API")
+            try:
+                service = self.get_google_calendar_service()
+                calendar_id = 'en.kh#holiday@group.v.calendar.google.com'  # ID for Cambodian holidays
+                now = datetime.utcnow().isoformat() + 'Z'
+                events_result = service.events().list(calendarId=calendar_id,
                                                     timeMin=now,
                                                     maxResults=100, singleEvents=True,
                                                     orderBy='startTime').execute()
-            events = events_result.get('items', [])
+                events = events_result.get('items', [])
 
-            holidays = []
-            for event in events:
-                start = event['start'].get('date', event['start'].get('dateTime'))
-                holidays.append({
-                    'name': event['summary'],
-                    'date': start[:10]  # Get only the date part
-                })
+                holidays = []
+                for event in events:
+                    start = event['start'].get('date', event['start'].get('dateTime'))
+                    holidays.append({
+                        'name': event['summary'],
+                        'date': start[:10]  # Get only the date part
+                    })
 
-            self.holiday_cache = {
-                'timestamp': current_time,
-                'data': holidays
-            }
+                self.holiday_cache = {
+                    'timestamp': current_time,
+                    'data': holidays
+                }
+                logger.info(f"Fetched {len(holidays)} holidays")
+            except Exception as e:
+                logger.error(f"Error fetching holidays: {str(e)}")
+                return []
 
         if limit_to_current_year:
             current_year = str(current_time.year)
@@ -172,9 +203,11 @@ class CalendarBot:
         await query.answer()
 
         current_year = datetime.now().year
+        logger.info(f"Fetching holidays for {current_year}")
         holidays = self.fetch_holidays(limit_to_current_year=True)
         
         if not holidays:
+            logger.warning("No holidays found")
             await query.edit_message_text(f"No upcoming holidays found for {current_year}.")
             return CHOOSING_ACTION
         
@@ -182,10 +215,12 @@ class CalendarBot:
         upcoming_holidays = [h for h in holidays if datetime.strptime(h['date'], '%Y-%m-%d').date() >= today]
         
         if not upcoming_holidays:
+            logger.info(f"No upcoming holidays for {current_year}")
             await query.edit_message_text(f"No more holidays left for {current_year}.")
             return CHOOSING_ACTION
         
         holiday_list = "\n".join([f"{h['date']}: {h['name']}" for h in upcoming_holidays])
+        logger.info(f"Sending list of {len(upcoming_holidays)} upcoming holidays")
         await query.edit_message_text(f"Upcoming holidays for {current_year}:\n\n{holiday_list}")
         return CHOOSING_ACTION
 
