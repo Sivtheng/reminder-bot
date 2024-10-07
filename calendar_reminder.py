@@ -296,19 +296,17 @@ class CalendarBot:
     async def run(self):
         self.application = Application.builder().token(self.token).build()
         self.setup_handlers()
-        self.application.add_handler(self.conv_handler)
         
         # Start the bot
         await self.application.initialize()
         await self.application.start()
         await self.application.updater.start_polling()
         
-        # Start the notification check loop
+        # Start the notification check loop after bot is initialized
         self.notification_task = asyncio.create_task(self.check_notifications())
         
         # Run the bot until the user presses Ctrl-C
-        await self.application.updater.stop()
-        await self.application.stop()
+        await self.application.updater.idle()
 
     async def stop(self):
         try:
@@ -321,8 +319,11 @@ class CalendarBot:
             traceback.print_exc()
 
     def setup_handlers(self):
+        start_handler = CommandHandler('start', self.handle_start_command)
+        self.application.add_handler(start_handler)
+
         self.conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', self.handle_start_command)],
+            entry_points=[start_handler],
             states={
                 CHOOSING_ACTION: [
                     CallbackQueryHandler(self.add_reminder, pattern='^add_reminder$'),
@@ -332,9 +333,9 @@ class CalendarBot:
                 ],
                 ADDING_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_reminder)],
             },
-            fallbacks=[CommandHandler('start', self.handle_start_command)],
+            fallbacks=[start_handler],
         )
-        self.application.add_handler(CommandHandler('start', self.handle_start_command))
+        self.application.add_handler(self.conv_handler)
 
     async def handle_start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return await self.start(update, context)
