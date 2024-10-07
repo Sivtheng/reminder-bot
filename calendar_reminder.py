@@ -141,11 +141,20 @@ class CalendarBot:
             [InlineKeyboardButton("List Holidays", callback_data='list_holidays')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            'Welcome to Calendar Notification Bot!\n'
-            'What would you like to do?',
-            reply_markup=reply_markup
-        )
+        
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(
+                'Welcome to Calendar Notification Bot!\n'
+                'What would you like to do?',
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text(
+                'Welcome to Calendar Notification Bot!\n'
+                'What would you like to do?',
+                reply_markup=reply_markup
+            )
         return CHOOSING_ACTION
 
     async def add_reminder(self, update, context):
@@ -315,26 +324,22 @@ class CalendarBot:
             traceback.print_exc()
 
     def setup_handlers(self):
-        start_handler = CommandHandler('start', self.handle_start_command)
+        start_handler = CommandHandler('start', self.start)
         self.application.add_handler(start_handler)
 
         self.conv_handler = ConversationHandler(
-            entry_points=[start_handler],
+            entry_points=[start_handler, CallbackQueryHandler(self.start, pattern='^start$')],
             states={
                 CHOOSING_ACTION: [
                     CallbackQueryHandler(self.add_reminder, pattern='^add_reminder$'),
                     CallbackQueryHandler(self.list_reminders, pattern='^list_reminders$'),
                     CallbackQueryHandler(self.list_holidays, pattern='^list_holidays$'),
-                    CallbackQueryHandler(self.start, pattern='^start$'),
                 ],
                 ADDING_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_reminder)],
             },
             fallbacks=[start_handler],
         )
         self.application.add_handler(self.conv_handler)
-
-    async def handle_start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        return await self.start(update, context)
 
 if __name__ == '__main__':
     try:
