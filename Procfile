@@ -1,1 +1,1 @@
-worker: python run_bot.py
+worker: python3 calendar_reminder.py

@@ -16,6 +16,9 @@ from google.auth.transport.requests import Request
 import traceback
 import logging
 from google.oauth2 import service_account
+import sys
+import signal
+from logging.handlers import RotatingFileHandler
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
@@ -25,7 +28,19 @@ warnings.filterwarnings("ignore", category=PTBUserWarning)
 # States for conversation handler
 CHOOSING_ACTION, ADDING_REMINDER = range(2)
 
-logging.basicConfig(level=logging.INFO)
+def signal_handler(signum, frame):
+    logger.info("Signal received. Performing cleanup...")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 logger = logging.getLogger(__name__)
 
 class CalendarBot:
@@ -289,7 +304,7 @@ class CalendarBot:
         await self.application.updater.start_polling()
         
         # Start the notification check loop
-        asyncio.create_task(self.check_notifications())
+        self.notification_task = asyncio.create_task(self.check_notifications())
         
         # Run the bot until the user presses Ctrl-C
         await self.application.updater.stop()
@@ -307,29 +322,34 @@ class CalendarBot:
 
     def setup_handlers(self):
         self.conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', self.start)],
+            entry_points=[CommandHandler('start', self.handle_start_command)],
             states={
                 CHOOSING_ACTION: [
                     CallbackQueryHandler(self.add_reminder, pattern='^add_reminder$'),
                     CallbackQueryHandler(self.list_reminders, pattern='^list_reminders$'),
                     CallbackQueryHandler(self.list_holidays, pattern='^list_holidays$'),
-                    CallbackQueryHandler(self.start, pattern='^start$'),  # Handle 'Back to Main Menu'
+                    CallbackQueryHandler(self.start, pattern='^start$'),
                 ],
                 ADDING_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_reminder)],
             },
-            fallbacks=[CommandHandler('start', self.start)],
+            fallbacks=[CommandHandler('start', self.handle_start_command)],
         )
+        self.application.add_handler(CommandHandler('start', self.handle_start_command))
+
+    async def handle_start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        return await self.start(update, context)
 
 if __name__ == '__main__':
-    load_dotenv()
-    BOT_TOKEN = os.getenv('BOT_TOKEN')
-    
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN environment variable is not set")
-
-    bot = CalendarBot(BOT_TOKEN)
-    
     try:
+        logger.info(f"Starting bot at {datetime.now()}")
+        load_dotenv()
+        BOT_TOKEN = os.getenv('BOT_TOKEN')
+        
+        if not BOT_TOKEN:
+            raise ValueError("BOT_TOKEN environment variable is not set")
+
+        bot = CalendarBot()
         asyncio.run(bot.run())
-    except KeyboardInterrupt:
-        print("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed: {str(e)}", exc_info=True)
+        sys.exit(1)
