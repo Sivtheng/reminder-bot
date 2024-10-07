@@ -209,7 +209,7 @@ class CalendarBot:
         finally:
             context.user_data['expecting_reminder'] = False
 
-    async def list_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async def list_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("List reminders method called")
         query = update.callback_query
         await query.answer()
@@ -217,20 +217,39 @@ class CalendarBot:
         user_id = str(update.effective_user.id)
         if user_id not in self.reminders or not self.reminders[user_id]:
             await query.edit_message_text("You have no reminders set.")
-            return ConversationHandler.END
-            
-        reminder_text = "Your reminders:\n\n"
+            return
+        
+        today = datetime.now().date()
+        active_reminders = []
+        for reminder in self.reminders[user_id]:
+            reminder_date = datetime.strptime(reminder['date'], '%Y-%m-%d').date()
+            if reminder_date >= today:
+                active_reminders.append(reminder)
+        
+        # Update user's reminders, removing past ones
+        self.reminders[user_id] = active_reminders
+        self.save_data(self.reminders, 'reminders.json')
+        
+        if not active_reminders:
+            await query.edit_message_text("You have no active reminders.")
+            return
+        
         # Sort reminders by date
         sorted_reminders = sorted(
-            self.reminders[user_id],
+            active_reminders,
             key=lambda x: datetime.strptime(x['date'], '%Y-%m-%d')
         )
         
+        reminder_text = "Your active reminders:\n\n"
         for reminder in sorted_reminders:
             reminder_text += f"📅 {reminder['date']}: {reminder['description']}\n"
-            
+        
         await query.edit_message_text(reminder_text)
-        return ConversationHandler.END
+        
+        # Add a button to go back to the main menu
+        keyboard = [[InlineKeyboardButton("Back to Main Menu", callback_data='start')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("What would you like to do next?", reply_markup=reply_markup)
 
     async def list_holidays(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("List holidays method called")
@@ -281,27 +300,37 @@ class CalendarBot:
                 today = now.date()
                 tomorrow = today + timedelta(days=1)
                 
-                # Fetch holidays
-                holidays = self.fetch_holidays(limit_to_current_year=True)
-                
-                # Check holidays
-                for holiday in holidays:
-                    holiday_date = datetime.strptime(holiday['date'], '%Y-%m-%d').date()
-                    if holiday_date == today or holiday_date == tomorrow:
-                        await self.send_holiday_notification(holiday, holiday_date == today)
-                
-                # Check reminders
                 for user_id, user_reminders in self.reminders.items():
+                    updated_reminders = []
                     for reminder in user_reminders:
                         reminder_date = datetime.strptime(reminder['date'], '%Y-%m-%d').date()
+                        
+                        if reminder_date < today:
+                            # Skip past reminders (they will be removed)
+                            continue
+                        
                         if reminder_date == today or reminder_date == tomorrow:
-                            await self.send_reminder_notification(user_id, reminder, reminder_date == today)
+                            # Send notification for today's and tomorrow's reminders
+                            message = f"⏰ Reminder for {'today' if reminder_date == today else 'tomorrow'}: {reminder['description']}"
+                            try:
+                                await self.application.bot.send_message(chat_id=user_id, text=message)
+                                logger.info(f"Sent reminder notification to user {user_id}")
+                            except Exception as e:
+                                logger.error(f"Failed to send reminder to user {user_id}: {str(e)}")
+                        
+                        updated_reminders.append(reminder)
+                    
+                    # Update user's reminders, removing past ones
+                    self.reminders[user_id] = updated_reminders
                 
+                # Save updated reminders to file
+                self.save_data(self.reminders, 'reminders.json')
+                
+                # Sleep for 24 hours before next check
+                await asyncio.sleep(24 * 60 * 60)
             except Exception as e:
-                logger.error(f"Error in check_notifications: {e}")
-            
-            # Check every hour
-            await asyncio.sleep(3600)
+                logger.error(f"Error in check_notifications: {str(e)}")
+                await asyncio.sleep(60)  # Wait for 1 minute before retrying if there's an error
 
     async def send_holiday_notification(self, holiday, is_today):
         message = f"🎉 {'Today' if is_today else 'Tomorrow'} is {holiday['name']}!"
