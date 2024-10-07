@@ -1,7 +1,7 @@
 import warnings
 from urllib3.exceptions import NotOpenSSLWarning
 from telegram.warnings import PTBUserWarning
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 import datetime
 import json
@@ -9,9 +9,7 @@ import asyncio
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
 import traceback
 import logging
 from google.oauth2 import service_account
@@ -53,27 +51,31 @@ class MemoryCache(Cache):
 
 class CalendarBot:
     def __init__(self):
-        load_dotenv()  # Load environment variables
+        load_dotenv()
         self.token = os.getenv('BOT_TOKEN')
-        self.reminders = self.load_data('reminders.json', {})
-        self.holiday_cache = {}
+        if not self.token:
+            raise ValueError("No token provided")
+        self.application = None
+        self.holiday_cache = None
         self.cache_expiry = 24 * 60 * 60  # 24 hours in seconds
-        self.stop_signal = asyncio.Event()
+        self.reminders = self.load_data('reminders.json')
+        logger.info("Bot initialized")
 
-    def load_data(self, filename, default):
+    def load_data(self, filename):
         try:
             with open(filename, 'r') as f:
-                content = f.read().strip()
-                if content:
-                    return json.loads(content)
-                else:
-                    return default
-        except (FileNotFoundError, json.JSONDecodeError):
-            return default
+                return json.load(f)
+        except FileNotFoundError:
+            logger.info(f"{filename} not found. Starting with empty data.")
+            return {}
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding {filename}. Starting with empty data.")
+            return {}
 
     def save_data(self, data, filename):
         with open(filename, 'w') as f:
             json.dump(data, f)
+        logger.info(f"Data saved to {filename}")
 
     def get_google_calendar_service(self):
         try:
@@ -195,7 +197,7 @@ class CalendarBot:
                 'date': date.strftime('%Y-%m-%d')  # Ensure consistent date format
             })
             
-            self.save_data(self.reminders, 'reminders.json')
+            self.save_data(self.reminders, 'reminders.json')  # Save after adding a reminder
             
             await update.message.reply_text(
                 f"Reminder set for {date_str}:\n{description}\n"
