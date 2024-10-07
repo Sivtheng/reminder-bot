@@ -17,6 +17,7 @@ import logging
 from google.oauth2 import service_account
 import sys
 import signal
+from googleapiclient.discovery_cache.base import Cache
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
@@ -40,6 +41,15 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+class MemoryCache(Cache):
+    _CACHE = {}
+
+    def get(self, url):
+        return MemoryCache._CACHE.get(url)
+
+    def set(self, url, content):
+        MemoryCache._CACHE[url] = content
 
 class CalendarBot:
     def __init__(self):
@@ -72,15 +82,12 @@ class CalendarBot:
                 logger.info("Found GOOGLE_CREDENTIALS environment variable")
                 creds_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
                 creds = service_account.Credentials.from_service_account_info(creds_info)
-            elif os.path.exists('credentials.json'):
-                logger.info("Found credentials.json file")
-                creds = service_account.Credentials.from_service_account_file('credentials.json')
             else:
-                logger.error("No credentials found. Set GOOGLE_CREDENTIALS or provide credentials.json")
+                logger.error("GOOGLE_CREDENTIALS environment variable not found")
                 return None
 
             logger.info("Building Google Calendar service")
-            return build('calendar', 'v3', credentials=creds)
+            return build('calendar', 'v3', credentials=creds, cache=MemoryCache())
         except json.JSONDecodeError:
             logger.error("Failed to parse GOOGLE_CREDENTIALS as JSON")
         except Exception as e:
@@ -132,6 +139,7 @@ class CalendarBot:
         return holidays
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("Start method called")
         # Reset conversation state
         context.user_data.clear()
         
@@ -143,6 +151,7 @@ class CalendarBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if update.callback_query:
+            logger.info("Handling callback query in start method")
             await update.callback_query.answer()
             await update.callback_query.edit_message_text(
                 'Welcome to Calendar Notification Bot!\n'
@@ -150,6 +159,7 @@ class CalendarBot:
                 reply_markup=reply_markup
             )
         else:
+            logger.info("Handling message in start method")
             await update.message.reply_text(
                 'Welcome to Calendar Notification Bot!\n'
                 'What would you like to do?',
@@ -157,14 +167,11 @@ class CalendarBot:
             )
         return CHOOSING_ACTION
 
-    async def add_reminder(self, update, context):
+    async def add_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("Add reminder method called")
         query = update.callback_query
         await query.answer()
-        await query.edit_message_text(
-            "Please send me the reminder description and date in this format:\n"
-            "Description, YYYY-MM-DD\n"
-            "Example: Birthday Party, 2024-12-25"
-        )
+        await query.edit_message_text("Please enter your reminder in the format: YYYY-MM-DD Description")
         return ADDING_REMINDER
 
     async def save_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -194,7 +201,8 @@ class CalendarBot:
             )
         return ConversationHandler.END
 
-    async def list_reminders(self, update, context):
+    async def list_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("List reminders method called")
         query = update.callback_query
         await query.answer()
         
@@ -217,10 +225,12 @@ class CalendarBot:
         return ConversationHandler.END
 
     async def list_holidays(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("List holidays method called")
         query = update.callback_query
         await query.answer()
 
-        current_year = datetime.now().year
+        current_time = datetime.now()
+        current_year = str(current_time.year)
         logger.info(f"Fetching holidays for {current_year}")
         holidays = self.fetch_holidays(limit_to_current_year=True)
         
@@ -324,6 +334,7 @@ class CalendarBot:
             traceback.print_exc()
 
     def setup_handlers(self):
+        logger.info("Setting up handlers")
         start_handler = CommandHandler('start', self.start)
         self.application.add_handler(start_handler)
 
@@ -340,6 +351,7 @@ class CalendarBot:
             fallbacks=[start_handler],
         )
         self.application.add_handler(self.conv_handler)
+        logger.info("Handlers set up successfully")
 
 if __name__ == '__main__':
     try:
