@@ -41,10 +41,12 @@ Calendar Notification Bot is a Telegram bot that helps users manage reminders an
 
 4. Set up environment variables:
    In your deployment environment (e.g., Railways), set the following variables:
-   ```
+
+   ```bash
    BOT_TOKEN=your_telegram_bot_token_here
    GOOGLE_CREDENTIALS={"type": "service_account", "project_id": "your_project_id", ...}
    ```
+
    Note: The GOOGLE_CREDENTIALS should contain the entire contents of your service account JSON key.
 
 ## Usage
