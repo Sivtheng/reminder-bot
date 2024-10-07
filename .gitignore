@@ -14,8 +14,6 @@ __pycache__/
 
 # Bot-specific files
 # reminders.json
-token.json
-credentials.json
 
 # OS-specific files
 .DS_Store

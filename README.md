@@ -15,7 +15,8 @@ Calendar Notification Bot is a Telegram bot that helps users manage reminders an
 
 - Python 3.7+
 - Telegram Bot Token
-- Google Calendar API credentials
+- Google Cloud project with Calendar API enabled
+- Service account with access to Google Calendar API
 
 ## Installation
 
@@ -29,30 +30,26 @@ Calendar Notification Bot is a Telegram bot that helps users manage reminders an
 2. Install required packages:
 
    ```bash
-   pip install python-telegram-bot google-auth-oauthlib google-auth-httplib2 google-api-python-client python-dotenv
+   pip install -r requirements.txt
    ```
 
-3. Set up environment variables:
-   Create a `.env` file in the project root and add your Telegram Bot Token:
+3. Set up Google Calendar API:
+   - Create a new project in the [Google Cloud Console](https://console.cloud.google.com/)
+   - Enable the Google Calendar API for your project
+   - Create a service account and download the JSON key
+   - Grant the service account access to the necessary Google Calendar(s)
 
-   ```bash
+4. Set up environment variables:
+   In your deployment environment (e.g., Railways), set the following variables:
+   ```
    BOT_TOKEN=your_telegram_bot_token_here
+   GOOGLE_CREDENTIALS={"type": "service_account", "project_id": "your_project_id", ...}
    ```
-
-4. Set up Google Calendar API:
-   - Create a service account in the Google Cloud Console.
-   - Download the JSON key for the service account.
-   - Either:
-     a. Set the contents of the JSON key as the `GOOGLE_CREDENTIALS` environment variable, or
-     b. Rename the JSON key file to `credentials.json` and place it in the project root directory.
+   Note: The GOOGLE_CREDENTIALS should contain the entire contents of your service account JSON key.
 
 ## Usage
 
-1. Run the bot:
-
-   ```bash
-   python3 calendar-reminder.py
-   ```
+1. Deploy the bot to your chosen platform (e.g., Railways, Heroku, etc.)
 
 2. Start a conversation with your bot on Telegram by sending the `/start` command.
 
@@ -60,6 +57,27 @@ Calendar Notification Bot is a Telegram bot that helps users manage reminders an
    - Add reminders
    - List reminders
    - View upcoming holidays
+
+## Development
+
+To run the bot locally for development:
+
+1. Create a `.env` file in the project root and add your environment variables:
+
+   ```bash
+   BOT_TOKEN=your_telegram_bot_token_here
+   GOOGLE_CREDENTIALS={"type": "service_account", "project_id": "your_project_id", ...}
+   ```
+
+2. Run the bot:
+
+   ```bash
+   python3 calendar_reminder.py
+   ```
+
+## Deployment
+
+This bot is designed to be deployed on platforms like Railways. Make sure to set the environment variables (BOT_TOKEN and GOOGLE_CREDENTIALS) in your deployment environment.
 
 ## Acknowledgements
 
