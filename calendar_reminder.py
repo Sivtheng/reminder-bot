@@ -1,7 +1,7 @@
 import warnings
 from urllib3.exceptions import NotOpenSSLWarning
 from telegram.warnings import PTBUserWarning
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler, ContextTypes
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 import datetime
 import json
@@ -126,7 +126,10 @@ class CalendarBot:
 
         return holidays
 
-    async def start(self, update, context):
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        # Reset conversation state
+        context.user_data.clear()
+        
         keyboard = [
             [InlineKeyboardButton("Add Reminder", callback_data='add_reminder')],
             [InlineKeyboardButton("List Reminders", callback_data='list_reminders')],
@@ -150,7 +153,7 @@ class CalendarBot:
         )
         return ADDING_REMINDER
 
-    async def save_reminder(self, update, context):
+    async def save_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         text = update.message.text
         try:
             description, date_str = map(str.strip, text.split(','))
@@ -162,13 +165,14 @@ class CalendarBot:
                 
             self.reminders[user_id].append({
                 'description': description,
-                'date': date_str
+                'date': date.strftime('%Y-%m-%d')  # Ensure consistent date format
             })
             
             self.save_data(self.reminders, 'reminders.json')
             
             await update.message.reply_text(
-                f"Reminder set for {date_str}:\n{description}"
+                f"Reminder set for {date_str}:\n{description}\n"
+                f"You will be notified one day before and on the day of the reminder."
             )
         except Exception as e:
             await update.message.reply_text(
@@ -198,7 +202,7 @@ class CalendarBot:
         await query.edit_message_text(reminder_text)
         return ConversationHandler.END
 
-    async def list_holidays(self, update: Update, context):
+    async def list_holidays(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
         await query.answer()
 
@@ -209,7 +213,7 @@ class CalendarBot:
         if not holidays:
             logger.warning("No holidays found")
             await query.edit_message_text(f"No upcoming holidays found for {current_year}.")
-            return CHOOSING_ACTION
+            return ConversationHandler.END
         
         today = datetime.now().date()
         upcoming_holidays = [h for h in holidays if datetime.strptime(h['date'], '%Y-%m-%d').date() >= today]
@@ -217,75 +221,79 @@ class CalendarBot:
         if not upcoming_holidays:
             logger.info(f"No upcoming holidays for {current_year}")
             await query.edit_message_text(f"No more holidays left for {current_year}.")
-            return CHOOSING_ACTION
+            return ConversationHandler.END
         
         holiday_list = "\n".join([f"{h['date']}: {h['name']}" for h in upcoming_holidays])
         logger.info(f"Sending list of {len(upcoming_holidays)} upcoming holidays")
         await query.edit_message_text(f"Upcoming holidays for {current_year}:\n\n{holiday_list}")
+        
+        # Add a button to go back to the main menu
+        keyboard = [[InlineKeyboardButton("Back to Main Menu", callback_data='start')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("What would you like to do next?", reply_markup=reply_markup)
+        
         return CHOOSING_ACTION
 
     async def check_notifications(self):
         while True:
             try:
                 now = datetime.now()
-                today = now.strftime('%Y-%m-%d')
+                today = now.date()
+                tomorrow = today + timedelta(days=1)
                 
-                # Fetch holidays from Google Calendar
-                holidays = self.fetch_holidays()
+                # Fetch holidays
+                holidays = self.fetch_holidays(limit_to_current_year=True)
                 
+                # Check holidays
                 for holiday in holidays:
-                    if holiday['date'] == today:
-                        for chat_id in self.reminders.keys():
-                            await self.application.bot.send_message(
-                                chat_id=chat_id,
-                                text=f"🎉 Today is {holiday['name']}!"
-                            )
+                    holiday_date = datetime.strptime(holiday['date'], '%Y-%m-%d').date()
+                    if holiday_date == today or holiday_date == tomorrow:
+                        await self.send_holiday_notification(holiday, holiday_date == today)
                 
                 # Check reminders
                 for user_id, user_reminders in self.reminders.items():
                     for reminder in user_reminders:
-                        if reminder['date'] == today:
-                            await self.application.bot.send_message(
-                                chat_id=user_id,
-                                text=f"⏰ Reminder: {reminder['description']}"
-                            )
+                        reminder_date = datetime.strptime(reminder['date'], '%Y-%m-%d').date()
+                        if reminder_date == today or reminder_date == tomorrow:
+                            await self.send_reminder_notification(user_id, reminder, reminder_date == today)
                 
             except Exception as e:
-                print(f"Error in check_notifications: {e}")
+                logger.error(f"Error in check_notifications: {e}")
             
             # Check every hour
             await asyncio.sleep(3600)
 
+    async def send_holiday_notification(self, holiday, is_today):
+        message = f"🎉 {'Today' if is_today else 'Tomorrow'} is {holiday['name']}!"
+        for user_id in self.reminders.keys():
+            try:
+                await self.application.bot.send_message(chat_id=user_id, text=message)
+            except Exception as e:
+                logger.error(f"Failed to send holiday notification to user {user_id}: {e}")
+
+    async def send_reminder_notification(self, user_id, reminder, is_today):
+        message = f"⏰ {'Reminder for today' if is_today else 'Reminder for tomorrow'}: {reminder['description']}"
+        try:
+            await self.application.bot.send_message(chat_id=user_id, text=message)
+        except Exception as e:
+            logger.error(f"Failed to send reminder notification to user {user_id}: {e}")
+
     async def run(self):
         self.application = Application.builder().token(self.token).build()
+        self.setup_handlers()
+        self.application.add_handler(self.conv_handler)
         
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', self.start)],
-            states={
-                CHOOSING_ACTION: [
-                    CallbackQueryHandler(self.add_reminder, pattern='^add_reminder$'),
-                    CallbackQueryHandler(self.list_reminders, pattern='^list_reminders$'),
-                    CallbackQueryHandler(self.list_holidays, pattern='^list_holidays$')
-                ],
-                ADDING_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_reminder)],
-            },
-            fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)]
-        )
-        
-        self.application.add_handler(conv_handler)
-        
-        # Start the notification checker in the background
-        self.notification_task = asyncio.create_task(self.check_notifications())
-        
+        # Start the bot
         await self.application.initialize()
         await self.application.start()
-        print("Bot started. Press Ctrl+C to stop.")
+        await self.application.updater.start_polling()
         
-        try:
-            await self.application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-            await asyncio.Event().wait()  # This will run forever until cancelled
-        finally:
-            await self.stop()
+        # Start the notification check loop
+        asyncio.create_task(self.check_notifications())
+        
+        # Run the bot until the user presses Ctrl-C
+        await self.application.updater.stop()
+        await self.application.stop()
 
     async def stop(self):
         try:
@@ -296,6 +304,21 @@ class CalendarBot:
         except Exception as e:
             print(f"Error during shutdown: {e}")
             traceback.print_exc()
+
+    def setup_handlers(self):
+        self.conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('start', self.start)],
+            states={
+                CHOOSING_ACTION: [
+                    CallbackQueryHandler(self.add_reminder, pattern='^add_reminder$'),
+                    CallbackQueryHandler(self.list_reminders, pattern='^list_reminders$'),
+                    CallbackQueryHandler(self.list_holidays, pattern='^list_holidays$'),
+                    CallbackQueryHandler(self.start, pattern='^start$'),  # Handle 'Back to Main Menu'
+                ],
+                ADDING_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_reminder)],
+            },
+            fallbacks=[CommandHandler('start', self.start)],
+        )
 
 if __name__ == '__main__':
     load_dotenv()
