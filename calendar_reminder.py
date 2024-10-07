@@ -95,7 +95,7 @@ class CalendarBot:
         
         return None
 
-    def fetch_holidays(self, limit_to_current_year=True):
+    def fetch_holidays(self):
         current_time = datetime.now()
         if self.holiday_cache and current_time - self.holiday_cache['timestamp'] < timedelta(seconds=self.cache_expiry):
             logger.info("Using cached holiday data")
@@ -127,6 +127,9 @@ class CalendarBot:
                         'name': event['summary'],
                         'date': start[:10]  # Get only the date part
                     })
+
+                # Sort holidays by date
+                holidays.sort(key=lambda x: x['date'])
 
                 self.holiday_cache = {
                     'timestamp': current_time,
@@ -243,8 +246,21 @@ class CalendarBot:
             await query.edit_message_text(f"No holidays found for {current_year}.")
             return
         
-        holiday_list = "\n".join([f"📅 {h['date']}: {h['name']}" for h in holidays])
-        message = f"Holidays for {current_year}:\n\n{holiday_list}"
+        # Filter out past holidays
+        remaining_holidays = [
+            h for h in holidays 
+            if datetime.strptime(h['date'], '%Y-%m-%d').date() >= current_time.date()
+        ]
+        
+        if not remaining_holidays:
+            await query.edit_message_text(f"No more holidays left for {current_year}.")
+            return
+        
+        # Sort remaining holidays by date
+        remaining_holidays.sort(key=lambda x: x['date'])
+        
+        holiday_list = "\n".join([f"📅 {h['date']}: {h['name']}" for h in remaining_holidays])
+        message = f"Remaining holidays for {current_year}:\n\n{holiday_list}"
         
         if len(message) > 4096:
             # If message is too long, split it
