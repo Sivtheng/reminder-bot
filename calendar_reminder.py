@@ -58,24 +58,8 @@ class CalendarBot:
         self.application = None
         self.holiday_cache = None
         self.cache_expiry = 24 * 60 * 60  # 24 hours in seconds
-        self.reminders = self.load_data('reminders.json')
+        self.reminders = {}  # Initialize as an empty dictionary
         logger.info("Bot initialized")
-
-    def load_data(self, filename):
-        try:
-            with open(filename, 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            logger.info(f"{filename} not found. Starting with empty data.")
-            return {}
-        except json.JSONDecodeError:
-            logger.error(f"Error decoding {filename}. Starting with empty data.")
-            return {}
-
-    def save_data(self, data, filename):
-        with open(filename, 'w') as f:
-            json.dump(data, f)
-        logger.info(f"Data saved to {filename}")
 
     def get_google_calendar_service(self):
         try:
@@ -198,8 +182,6 @@ class CalendarBot:
                 'date': date.strftime('%Y-%m-%d')  # Ensure consistent date format
             })
             
-            self.save_data(self.reminders, 'reminders.json')  # Save after adding a reminder
-            
             await update.message.reply_text(
                 f"Reminder set for {date_str}:\n{description}\n"
                 f"You will be notified one day before and on the day of the reminder."
@@ -231,7 +213,6 @@ class CalendarBot:
         
         # Update user's reminders, removing past ones
         self.reminders[user_id] = active_reminders
-        self.save_data(self.reminders, 'reminders.json')
         
         if not active_reminders:
             await query.edit_message_text("You have no active reminders.")
@@ -339,9 +320,6 @@ class CalendarBot:
                     # Update user's reminders, removing past ones
                     self.reminders[user_id] = updated_reminders
                 
-                # Save updated reminders to file
-                self.save_data(self.reminders, 'reminders.json')
-                
             except Exception as e:
                 logger.error(f"Error in check_notifications: {str(e)}")
                 await asyncio.sleep(60)  # Wait for 1 minute before retrying if there's an error
@@ -391,10 +369,14 @@ class CalendarBot:
         
         if user_id in self.reminders and 0 <= reminder_index < len(self.reminders[user_id]):
             deleted_reminder = self.reminders[user_id].pop(reminder_index)
-            self.save_data(self.reminders, 'reminders.json')
             await query.edit_message_text(f"Deleted reminder: {deleted_reminder['date']}: {deleted_reminder['description']}")
         else:
             await query.edit_message_text("Failed to delete reminder. Please try again.")
+
+        # Add a button to go back to the main menu
+        keyboard = [[InlineKeyboardButton("Back to Main Menu", callback_data='start')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("What would you like to do next?", reply_markup=reply_markup)
 
     async def run(self):
         self.application = Application.builder().token(self.token).build()
@@ -457,7 +439,13 @@ class CalendarBot:
             await self.list_reminders(update, context)
         elif query.data == 'list_holidays':
             await self.list_holidays(update, context)
+        elif query.data == 'delete_reminder':
+            await self.delete_reminder(update, context)
+        elif query.data.startswith('delete_'):
+            await self.handle_delete_reminder(update, context)
         elif query.data == 'start':
+            await self.start(update, context)
+        elif query.data == 'cancel_delete':
             await self.start(update, context)
         else:
             logger.warning(f"Unknown callback query data: {query.data}")
