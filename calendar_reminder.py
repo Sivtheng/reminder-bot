@@ -6,7 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 import datetime
 import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import os
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
@@ -152,6 +152,7 @@ class CalendarBot:
         keyboard = [
             [InlineKeyboardButton("Add Reminder", callback_data='add_reminder')],
             [InlineKeyboardButton("List Reminders", callback_data='list_reminders')],
+            [InlineKeyboardButton("Delete Reminder", callback_data='delete_reminder')],
             [InlineKeyboardButton("List Holidays", callback_data='list_holidays')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -299,7 +300,20 @@ class CalendarBot:
         while True:
             try:
                 now = datetime.now()
-                today = now.date()
+                target_time = time(hour=6, minute=0)  # 6:00 AM
+                
+                # Calculate time until next 6 AM
+                if now.time() > target_time:
+                    next_run = now + timedelta(days=1)
+                else:
+                    next_run = now
+                next_run = next_run.replace(hour=6, minute=0, second=0, microsecond=0)
+                
+                # Sleep until 6 AM
+                sleep_seconds = (next_run - now).total_seconds()
+                await asyncio.sleep(sleep_seconds)
+                
+                today = next_run.date()
                 tomorrow = today + timedelta(days=1)
                 
                 for user_id, user_reminders in self.reminders.items():
@@ -328,8 +342,6 @@ class CalendarBot:
                 # Save updated reminders to file
                 self.save_data(self.reminders, 'reminders.json')
                 
-                # Sleep for 24 hours before next check
-                await asyncio.sleep(24 * 60 * 60)
             except Exception as e:
                 logger.error(f"Error in check_notifications: {str(e)}")
                 await asyncio.sleep(60)  # Wait for 1 minute before retrying if there's an error
@@ -348,6 +360,41 @@ class CalendarBot:
             await self.application.bot.send_message(chat_id=user_id, text=message)
         except Exception as e:
             logger.error(f"Failed to send reminder notification to user {user_id}: {e}")
+
+    async def delete_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.info("Delete reminder method called")
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = str(update.effective_user.id)
+        if user_id not in self.reminders or not self.reminders[user_id]:
+            await query.edit_message_text("You have no reminders to delete.")
+            return
+        
+        keyboard = []
+        for i, reminder in enumerate(self.reminders[user_id]):
+            callback_data = f"delete_{i}"
+            button_text = f"{reminder['date']}: {reminder['description'][:20]}..."
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        keyboard.append([InlineKeyboardButton("Cancel", callback_data='cancel_delete')])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text("Select a reminder to delete:", reply_markup=reply_markup)
+
+    async def handle_delete_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = str(update.effective_user.id)
+        reminder_index = int(query.data.split('_')[1])
+        
+        if user_id in self.reminders and 0 <= reminder_index < len(self.reminders[user_id]):
+            deleted_reminder = self.reminders[user_id].pop(reminder_index)
+            self.save_data(self.reminders, 'reminders.json')
+            await query.edit_message_text(f"Deleted reminder: {deleted_reminder['date']}: {deleted_reminder['description']}")
+        else:
+            await query.edit_message_text("Failed to delete reminder. Please try again.")
 
     async def run(self):
         self.application = Application.builder().token(self.token).build()
@@ -390,6 +437,11 @@ class CalendarBot:
 
         # Add a message handler for adding reminders
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_reminder))
+
+        # Add handler for deleting reminders
+        self.application.add_handler(CallbackQueryHandler(self.delete_reminder, pattern='^delete_reminder$'))
+        self.application.add_handler(CallbackQueryHandler(self.handle_delete_reminder, pattern='^delete_\d+$'))
+        self.application.add_handler(CallbackQueryHandler(self.start, pattern='^cancel_delete$'))
 
         logger.info("Handlers set up successfully")
 
